@@ -1,0 +1,153 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom"><title>Ian Kronquist</title><link href="/" rel="alternate"></link><link href="/feeds/misc.atom.xml" rel="self"></link><id>/</id><updated>2015-05-10T12:32:00-07:00</updated><entry><title>A Guide to Fixing memory leaks with Valgrind and GDB</title><link href="/memory_leaks.html" rel="alternate"></link><updated>2015-05-10T12:32:00-07:00</updated><author><name>Ian Kronquist</name></author><id>tag:,2015-05-10:memory_leaks.html</id><summary type="html">&lt;p&gt;Valgrind and GDB are some of a C or C++ programmer's most powerful tools for
+fixing memory leaks and segfaults. Anyone interested in writing either of these
+languages should master these tools. This code and exercise is based on some
+buggy code I wrote just a couple days ago. The steps here are almost literally
+the same steps I took to fix my program. This exercise should give you insight
+into how to use Valgrind and GDB effectively.&lt;/p&gt;
+&lt;p&gt;This adapted from an &lt;a class="reference external" href="https://github.com/DevOpsBootcamp/Bootcamp-Exercises/tree/master/debuggers-and-dev-tools/memory_leaks"&gt;exercise&lt;/a&gt; I wrote for the &lt;a class="reference external" href="http://devopsbootcamp.osuosl.org"&gt;DevOps BootCamp&lt;/a&gt; program at
+OSU.&lt;/p&gt;
+&lt;p&gt;Before going further, you should be familiar with the following:&lt;/p&gt;
+&lt;ul class="simple"&gt;
+&lt;li&gt;You should know what a tree data structure is, and generally how one is implemented (don't worry, the implementation is given to you).&lt;/li&gt;
+&lt;li&gt;What do &lt;cite&gt;malloc&lt;/cite&gt; and &lt;cite&gt;free&lt;/cite&gt; do? (Hint: the same thing as &lt;cite&gt;new&lt;/cite&gt; and &lt;cite&gt;delete&lt;/cite&gt; in C++)&lt;/li&gt;
+&lt;li&gt;You should read the man page for &lt;cite&gt;realloc&lt;/cite&gt;.&lt;/li&gt;
+&lt;li&gt;You might have written something which used a pointer to a pointer (&lt;cite&gt;int**&lt;/cite&gt;)&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;I'm writing an interpreter. An interpreter builds and tree data structure from
+my new language's source code. &lt;cite&gt;ast&lt;/cite&gt; stands for Abstact Syntax Tree.
+In my code, a token is the data held by an individual node in the tree.&lt;/p&gt;
+&lt;p&gt;We are interested in two files, &lt;a class="reference external" href="https://github.com/DevOpsBootcamp/Bootcamp-Exercises/blob/master/debuggers-and-dev-tools/memory_leaks/ast.c"&gt;ast.c&lt;/a&gt; and &lt;a class="reference external" href="https://github.com/DevOpsBootcamp/Bootcamp-Exercises/blob/master/debuggers-and-dev-tools/memory_leaks/ast_tests.c"&gt;ast_tests.c&lt;/a&gt;. The first is the
+implementation of the tree, and the second is a series of working tests for the
+tree.&lt;/p&gt;
+&lt;p&gt;Even though the tests pass, there are two memory leaks. We're going to fix
+them. You will need gcc, make, valgrind, and gdb installed.&lt;/p&gt;
+&lt;p&gt;First, compile the project:&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre&gt;&lt;span class="nv"&gt;$ &lt;/span&gt;make
+gcc -c ast.c -o ast.o -O0 -Wall -g -std&lt;span class="o"&gt;=&lt;/span&gt;c99
+ast.c: In &lt;span class="k"&gt;function&lt;/span&gt; ‘append_child’:
+ast.c:24: warning: ignoring &lt;span class="k"&gt;return&lt;/span&gt; value of ‘realloc’, declared with attribute
+warn_unused_result
+gcc ast_tests.c ast.o -o ast_tests -O0 -Wall -g -std&lt;span class="o"&gt;=&lt;/span&gt;c99
+&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;Hmmm, a warning. Let's make note of that and return to it in a minute.&lt;/p&gt;
+&lt;p&gt;Then, run the tests:&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre&gt;&lt;span class="nv"&gt;$ &lt;/span&gt;./ast_tests
+&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;There seems to be an awful looking memory error.&lt;/p&gt;
+&lt;p&gt;Let's try running the tests with valgrind:&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre&gt;&lt;span class="nv"&gt;$ &lt;/span&gt;valgrind ./ast_tests
+&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;You should see three types of errors:&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre&gt;==75081== Invalid write of size 8
+==75081== Invalid read of size 8
+==75081== Conditional jump or move depends on uninitialised value(s)
+&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;And this summary at the end:&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre&gt;==15534== HEAP SUMMARY:
+==15534==     in use at exit: 4 bytes in 1 blocks
+==15534==   total heap usage: 34 allocs, 34 frees, 756 bytes allocated
+==15534==
+==15534== LEAK SUMMARY:
+==15534==    definitely lost: 4 bytes in 1 blocks
+==15534==    indirectly lost: 0 bytes in 0 blocks
+==15534==      possibly lost: 0 bytes in 0 blocks
+==15534==    still reachable: 0 bytes in 0 blocks
+==15534==         suppressed: 0 bytes in 0 blocks
+==15534== Rerun with --leak-check=full to see details of leaked memory
+&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;Let's look at that warning again:&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre&gt;&lt;span class="nv"&gt;$ &lt;/span&gt;gcc -c ast.c -o ast.o -O0 -Wall -g -std&lt;span class="o"&gt;=&lt;/span&gt;c99
+ast.c: In &lt;span class="k"&gt;function&lt;/span&gt; ‘append_child’:
+ast.c:24: warning: ignoring &lt;span class="k"&gt;return&lt;/span&gt; value of ‘realloc’, declared with attribute
+warn_unused_result
+&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;Let's remind ourselves what &lt;cite&gt;realloc&lt;/cite&gt; does&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre&gt;&lt;span class="nv"&gt;$ &lt;/span&gt;man realloc
+&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;So, line 24 should really look like this:&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre&gt;&lt;span class="n"&gt;node&lt;/span&gt;&lt;span class="o"&gt;-&amp;gt;&lt;/span&gt;&lt;span class="n"&gt;children&lt;/span&gt; &lt;span class="o"&gt;=&lt;/span&gt; &lt;span class="n"&gt;realloc&lt;/span&gt;&lt;span class="p"&gt;(&lt;/span&gt;&lt;span class="n"&gt;node&lt;/span&gt;&lt;span class="o"&gt;-&amp;gt;&lt;/span&gt;&lt;span class="n"&gt;children&lt;/span&gt;&lt;span class="p"&gt;,&lt;/span&gt; &lt;span class="n"&gt;node&lt;/span&gt;&lt;span class="o"&gt;-&amp;gt;&lt;/span&gt;&lt;span class="n"&gt;num_children&lt;/span&gt; &lt;span class="o"&gt;*&lt;/span&gt; &lt;span class="mi"&gt;2&lt;/span&gt;&lt;span class="p"&gt;);&lt;/span&gt;
+&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;If we rerun valgrind we see that all of our memory is no successfully freed!
+We don't have anymore memory leaks.
+But, what about these invalid reads and writes?
+Let's take a look at the first one:&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre&gt;==16938== Invalid write of size 8
+==16938==    at 0x401889: append_child (ast.c:26)
+==16938==    by 0x400F99: test_append_child (ast_tests.c:92)
+==16938==    by 0x4005BB: main (ast_tests.c:33)
+==16938==  Address 0x4c3b570 is 0 bytes after a block of size 0 alloc&amp;#39;d
+==16938==    at 0x4A06A2E: malloc (vg_replace_malloc.c:270)
+==16938==    by 0x40172E: make_node (ast.c:11)
+==16938==    by 0x400EF7: test_append_child (ast_tests.c:88)
+==16938==    by 0x4005BB: main (ast_tests.c:33)
+&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;It happens on line 26 of &lt;cite&gt;ast.c&lt;/cite&gt;:&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre&gt;&lt;span class="n"&gt;node&lt;/span&gt;&lt;span class="o"&gt;-&amp;gt;&lt;/span&gt;&lt;span class="n"&gt;children&lt;/span&gt;&lt;span class="p"&gt;[&lt;/span&gt;&lt;span class="n"&gt;node&lt;/span&gt;&lt;span class="o"&gt;-&amp;gt;&lt;/span&gt;&lt;span class="n"&gt;num_children&lt;/span&gt;&lt;span class="p"&gt;]&lt;/span&gt; &lt;span class="o"&gt;=&lt;/span&gt; &lt;span class="n"&gt;val&lt;/span&gt;&lt;span class="p"&gt;;&lt;/span&gt;
+&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;Okay, let's run fire up gdb and see what happens on that line.&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre&gt;$ gdb ./ast_tests
+(gdb) break ast.c:26
+Breakpoint 1 at 0x40186e: file ast.c, line 26.
+(gdb) run
+Breakpoint 1, append_child (node=0x6021c0, val=0x602140) at ast.c:26
+26          node-&amp;gt;children[node-&amp;gt;num_children] = val;
+&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;We can print the fields of the node struct. First, lets check that &lt;cite&gt;node-&amp;gt;children&lt;/cite&gt; isn't
+NULL, or something similarly silly, and then lets check that the number of children is less than the capacity of children.&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre&gt;(gdb) print node-&amp;gt;children
+$1 = (struct ast_node **) 0x602070
+(gdb) print node-&amp;gt;num_children
+$2 = 0
+(gdb) print node-&amp;gt;children_cap
+$3 = 2
+&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;Everything seems fine, let's continue...&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre&gt;(gdb) continue
+Continuing.
+&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;We hit the breakpoint and continue a few more times before the program explodes in our face.
+Okay then, that didn't pan out. Let's see what other lines might screw up our program's
+memory, maybe, that realloc line we were looking at earlier:&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre&gt;(gdb) break ast.c:24
+Breakpoint 1 at 0x401844: file ast.c, line 24.
+(gdb) print node-&amp;gt;num_children
+$4 = 2
+&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;It looks like the program has a problem after we hit that line.
+We want that line to double the size of our space for the children nodes.
+The first argument was our pointer, which seems fine, and the second argument was
+the number of bytes we want to allocate. We want to double our allocation so we put
+twice our number of children, which is four bytes.
+Wait, how big is a single child node?&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre&gt;(gdb) print sizeof(struct ast_node*)
+$5 = 8
+&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;This looks like a problem. We want enough space for four pointers to our nodes, which are each
+8 bytes long. We allocated 4 bytes total, not even enough for one node.
+Then line 24 should look like:&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre&gt;&lt;span class="n"&gt;node&lt;/span&gt;&lt;span class="o"&gt;-&amp;gt;&lt;/span&gt;&lt;span class="n"&gt;children&lt;/span&gt; &lt;span class="o"&gt;=&lt;/span&gt; &lt;span class="n"&gt;realloc&lt;/span&gt;&lt;span class="p"&gt;(&lt;/span&gt;&lt;span class="n"&gt;node&lt;/span&gt;&lt;span class="o"&gt;-&amp;gt;&lt;/span&gt;&lt;span class="n"&gt;children&lt;/span&gt;&lt;span class="p"&gt;,&lt;/span&gt;
+        &lt;span class="k"&gt;sizeof&lt;/span&gt;&lt;span class="p"&gt;(&lt;/span&gt;&lt;span class="k"&gt;struct&lt;/span&gt; &lt;span class="n"&gt;ast_node&lt;/span&gt;&lt;span class="o"&gt;*&lt;/span&gt;&lt;span class="p"&gt;)&lt;/span&gt; &lt;span class="o"&gt;*&lt;/span&gt; &lt;span class="n"&gt;node&lt;/span&gt;&lt;span class="o"&gt;-&amp;gt;&lt;/span&gt;&lt;span class="n"&gt;num_children&lt;/span&gt; &lt;span class="o"&gt;*&lt;/span&gt; &lt;span class="mi"&gt;2&lt;/span&gt;&lt;span class="p"&gt;);&lt;/span&gt;
+&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;Now let's rerun valgrind:&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre&gt;&lt;span class="nv"&gt;$ &lt;/span&gt;make
+&lt;span class="nv"&gt;$ &lt;/span&gt;valgrind ./ast_tests
+...
+&lt;span class="o"&gt;==&lt;/span&gt;&lt;span class="nv"&gt;19899&lt;/span&gt;&lt;span class="o"&gt;==&lt;/span&gt; ERROR SUMMARY: &lt;span class="m"&gt;4&lt;/span&gt; errors from &lt;span class="m"&gt;4&lt;/span&gt; contexts &lt;span class="o"&gt;(&lt;/span&gt;suppressed: &lt;span class="m"&gt;6&lt;/span&gt; from 6&lt;span class="o"&gt;)&lt;/span&gt;
+&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;It looks like we just halved the number of errors!&lt;/p&gt;
+&lt;p&gt;Well, our last error was from allocating the wrong amount of space
+using realloc. Let's look at what our malloc  line does:&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre&gt;&lt;span class="n"&gt;new_node&lt;/span&gt;&lt;span class="o"&gt;-&amp;gt;&lt;/span&gt;&lt;span class="n"&gt;children&lt;/span&gt; &lt;span class="o"&gt;=&lt;/span&gt; &lt;span class="n"&gt;malloc&lt;/span&gt;&lt;span class="p"&gt;(&lt;/span&gt;&lt;span class="k"&gt;sizeof&lt;/span&gt;&lt;span class="p"&gt;(&lt;/span&gt;&lt;span class="k"&gt;struct&lt;/span&gt; &lt;span class="n"&gt;ast_node&lt;/span&gt;&lt;span class="o"&gt;*&lt;/span&gt;&lt;span class="p"&gt;)&lt;/span&gt; &lt;span class="o"&gt;*&lt;/span&gt; &lt;span class="n"&gt;num_children&lt;/span&gt;&lt;span class="p"&gt;);&lt;/span&gt;
+&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;Everything seems to be in order, we're making an array of ast_nodes which
+is as long as &lt;cite&gt;num_children&lt;/cite&gt;.&lt;/p&gt;
+&lt;p&gt;We resize our allocation when we run out of capacity for children pointers.
+We allocate enough space for the number of children we're given, and set our
+capacity to be two more than that. Wait a minute, we don't allocate enough space.
+We need to allocate two extra slots:&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre&gt;&lt;span class="n"&gt;new_node&lt;/span&gt;&lt;span class="o"&gt;-&amp;gt;&lt;/span&gt;&lt;span class="n"&gt;children&lt;/span&gt; &lt;span class="o"&gt;=&lt;/span&gt; &lt;span class="n"&gt;malloc&lt;/span&gt;&lt;span class="p"&gt;(&lt;/span&gt;&lt;span class="k"&gt;sizeof&lt;/span&gt;&lt;span class="p"&gt;(&lt;/span&gt;&lt;span class="k"&gt;struct&lt;/span&gt; &lt;span class="n"&gt;ast_node&lt;/span&gt;&lt;span class="o"&gt;*&lt;/span&gt;&lt;span class="p"&gt;)&lt;/span&gt; &lt;span class="o"&gt;*&lt;/span&gt; &lt;span class="p"&gt;(&lt;/span&gt;&lt;span class="n"&gt;num_children&lt;/span&gt; &lt;span class="o"&gt;+&lt;/span&gt; &lt;span class="mi"&gt;2&lt;/span&gt;&lt;span class="p"&gt;));&lt;/span&gt;
+&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;Rerun valgrind, and all of our problems disappear.
+The program no longer has any memory leaks.&lt;/p&gt;
+</summary></entry></feed>
